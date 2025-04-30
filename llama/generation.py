@@ -24,7 +24,7 @@ class Generation(nn.Module):
                 if kv_caching:
                     logits = self(tokens[:, prev_pos:cur_pos], prev_pos)
                 else:
-                    pass
+                    logits = self(tokens[:, : cur_pos], 0)
             if temperature > 0:
                 probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
                 next_token = sample_top_p(probs, top_p)
