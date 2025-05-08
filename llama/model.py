@@ -10,6 +10,9 @@ import torch.nn.functional as F
 from torch import nn
 
 from llama.generation import Generation
+from torch.utils.checkpoint import checkpoint
+
+SET_GRADIENT_CHECKPOINT = True
 
 
 @dataclass
@@ -441,8 +444,11 @@ class Llama(Generation):
 
             mask = torch.triu(mask, diagonal=1)
 
-        for layer in self.layers:
-            h = layer(h, start_pos, freqs_cis, mask)
+        for i, layer in enumerate(self.layers):
+            if SET_GRADIENT_CHECKPOINT and i % 3 != 0:
+                h = checkpoint(layer, h, start_pos, freqs_cis, mask)
+            else:
+                h = layer(h, start_pos, freqs_cis, mask)
         h = self.norm(h)
         output = self.output(h).float()
         return output
