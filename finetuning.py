@@ -1,6 +1,7 @@
 # finetuning.py
 import logging
 import copy
+import argparse
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence
 
@@ -11,7 +12,7 @@ import transformers
 import utils
 import json
 from torch.utils.data import Dataset, DataLoader
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.utils.checkpoint import checkpoint
 
 from pathlib import Path
@@ -27,21 +28,30 @@ from llama.model import Llama, ModelArgs  # Custom model class
 from llama.tokenizer import Tokenizer
 from llama.lora import apply_lora_to_llama, mark_only_lora_as_trainable
 
+# Argument parser for benchmark flags
+parser = argparse.ArgumentParser()
+parser.add_argument("--ga", type=int, default=0, help="Enable gradient accumulation")
+parser.add_argument("--gc", type=int, default=0, help="Enable gradient checkpointing")
+parser.add_argument("--mp", type=int, default=0, help="Enable mixed precision")
+parser.add_argument("--lora", type=int, default=0, help="Enable LoRA")
+args = parser.parse_args()
+
 # Constants
 IGNORE_INDEX = -100
 MAX_LENGTH = 512
 BATCH_SIZE = 1
 LEARNING_RATE = 1e-5
-EPOCHS = 10
-SET_MIXED_PRECISION = True  # Set to True to enable mixed precision training
-SET_GRADIENT_ACCUMULATION = False  # Set to True to enable gradient accumulation
+EPOCHS = 1
+SET_GRADIENT_ACCUMULATION = bool(args.ga)  # Set to True to enable gradient accumulation
 if SET_GRADIENT_ACCUMULATION:
     ACCUMULATION_STEPS = 8  # Set to 8 for gradient accumulation
 else:
     ACCUMULATION_STEPS = 1
-    
-SET_LORA = True  # Set to True to enable LoRA
-SET_CHECKPOINT = True  # Set to True to enable checkpointing
+SET_CHECKPOINT = bool(args.gc)
+SET_MIXED_PRECISION = bool(args.mp)
+SET_LORA = bool(args.lora)
+print(f"Gradient Checkpointing: {SET_CHECKPOINT}, Mixed Precision: {SET_MIXED_PRECISION}, LoRA: {SET_LORA}")
+print(f"Gradient Accumulation Steps: {ACCUMULATION_STEPS}")
 LORA_R = 16  # LoRA rank
 LORA_ALPHA = 32  # LoRA alpha
 LORA_DROPOUT = 0.05  # LoRA dropout rate
@@ -75,7 +85,7 @@ PROMPT_DICT = {
 def get_peak_memory_mb():
     return torch.cuda.max_memory_allocated() / (1024 ** 2)
 
-def _tokenize_fn(strings: Sequence[str], tokenizer: transformers.PreTrainedTokenizer) -> Dict:
+def _tokenize_fn(strings: Sequence[str], tokenizer: Tokenizer) -> Dict:
     """Tokenize a list of strings."""
     input_ids = []
     for text in strings:
@@ -155,29 +165,30 @@ class DataCollatorForSupervisedDataset(object):
         )
 
 def train(model, dataset, data_collator, tokenizer, lora_params_info):
-    start_time = time.time()
-    print("Starting training...")
     model.train()
     optimizer = SGD([p for p in model.parameters() if p.requires_grad], lr=LEARNING_RATE)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, collate_fn=data_collator, shuffle=True)
-    scaler = GradScaler() if SET_MIXED_PRECISION else None
+    scaler = GradScaler('cuda') if SET_MIXED_PRECISION else None
+    loss_log = []
     
     print("Starting training...")
+    start_time = time.time()
     for epoch in range(EPOCHS):
         print(f"Epoch {epoch + 1}/{EPOCHS}")
         total_loss = 0.0
-        progress_bar = tqdm(dataloader, desc="Training", leave=False)
+        #progress_bar = tqdm(dataloader, desc="Training", leave=False)
         
-        for step, batch in enumerate(progress_bar):
+        for step, batch in enumerate(dataloader):
             # Move batch to GPU if available
             batch = {k: v.to(device) for k, v in batch.items()}
             # Unpack batch
             input_ids = batch["input_ids"].to(device)
             labels = batch["labels"].to(device)
             attention_mask = batch["attention_mask"].to(device)
-                
+            
+            #print(f"finetuning.py: SET_MIXED_PRECISION: {SET_MIXED_PRECISION}")
             if SET_MIXED_PRECISION:
-                with autocast(dtype=torch.float16):
+                with autocast('cuda', dtype=torch.float16):
                     # Forward pass - using the custom Llama model interface
                     logits = model(tokens=input_ids, start_pos=0)
                     
@@ -193,6 +204,8 @@ def train(model, dataset, data_collator, tokenizer, lora_params_info):
                     
                     shift_labels = shift_labels.to(shift_logits.device)
                     loss = loss_fct(shift_logits, shift_labels)
+                loss_item = loss.item()
+                loss = loss / ACCUMULATION_STEPS  # Scale the loss for gradient accumulation
                 scaler.scale(loss).backward()  # Scale the loss for mixed precision
             else:
                 # Forward pass - using the custom Llama model interface
@@ -215,7 +228,7 @@ def train(model, dataset, data_collator, tokenizer, lora_params_info):
                 loss.backward() # Accumulate gradients
             
             # Step and zero gradients every ACCUMULATION_STEPS
-            if (step + 1) % ACCUMULATION_STEPS == 0:
+            if ((step + 1) % ACCUMULATION_STEPS == 0) or (step + 1 == len(dataloader)):
                 if SET_MIXED_PRECISION:
                     scaler.step(optimizer)
                     scaler.update()
@@ -223,24 +236,39 @@ def train(model, dataset, data_collator, tokenizer, lora_params_info):
                     optimizer.step()
                     
                 optimizer.zero_grad()
+                
             
             total_loss += loss.item()
-            progress_bar.set_postfix(loss=total_loss / (step + 1))
-            
-            # if step % 10 == 0:
-            #     print(f"Step {step}, Loss: {loss.item()}")
+            #progress_bar.set_postfix(loss=total_loss / (step + 1))
+            if (step + 1) % 10 == 0:
+                print(f"Step {step + 1}/{len(dataloader)}, Loss: {total_loss / (step + 1):.4f}")
+                loss_log.append(total_loss / (step + 1))
             
         print(f"Epoch {epoch + 1} finished. Avg Loss: {total_loss / len(dataloader):.4f}")
     
     end_time = time.time()
-    print("Training complete. Saving model...")
-    # Save the model
-    os.makedirs("./fine_tuned_model", exist_ok=True)
-    torch.save(model.state_dict(), "./fine_tuned_model/consolidated.00.pth")
-    print("Model saved.")
-    
     print(f"Training time: {end_time - start_time:.2f} seconds")
     print(f"Peak memory usage: {get_peak_memory_mb():.2f} MB")
+    print("Training complete. Saving model...")
+    # Save the model
+    model_dir = f"./fine_tuned_model_{int(SET_GRADIENT_ACCUMULATION)}ga_{int(SET_CHECKPOINT)}gc_{int(SET_MIXED_PRECISION)}mp_{int(SET_LORA)}lora"
+    os.makedirs(model_dir, exist_ok=True)
+    torch.save(model.state_dict(), os.path.join(model_dir, "consolidated.00.pth"))
+    print(f"Model saved to: {model_dir}")
+    
+    with open(os.path.join(model_dir, "loss_log.txt"), "w") as f:
+        for i, loss in enumerate(loss_log):
+            f.write(f"Step {i*10}: {loss:.4f}\n")
+        f.write(f"Avg Loss: {total_loss / len(dataloader):.4f}\n")
+        f.write(f"Training time: {end_time - start_time:.2f} seconds\n")
+        f.write(f"Peak memory usage: {get_peak_memory_mb():.2f} MB\n")
+        # Write the number of trainable parameters
+        if SET_LORA:
+            f.write(f"Trainable parameters: {lora_params_info[1]}, Total parameters: {lora_params_info[2]}\n")
+            f.write(f"Percentage of trainable parameters: {lora_params_info[0]}%\n")
+        else:
+            f.write(f"Total parameters: {sum(p.numel() for p in model.parameters())}\n")
+    
     # Print the number of trainable parameters
     if SET_LORA:
         print(f"Trainable parameters: {lora_params_info[1]}, Total parameters: {lora_params_info[2]}")
@@ -265,10 +293,11 @@ if __name__ == "__main__":
     model_args = ModelArgs()
 
     model_args.kv_caching = False  # Disable KV cache during training if available
+    model_args.use_gradient_checkpoint = SET_CHECKPOINT  # Enable gradient checkpointing if specified
     
     # Create and load the model
     model = Llama(model_args)
-    model.load_state_dict(ckpt_point, strict=True)
+    model.load_state_dict(ckpt_point, strict=False)
     
     if SET_LORA:
         # Apply LoRA to the model
@@ -278,6 +307,8 @@ if __name__ == "__main__":
             alpha=LORA_ALPHA,
             dropout=LORA_DROPOUT
         )
+    else:
+        lora_params_info = (0, 0, 0) # Dummy values if LoRA is not used
     
     # Move model to GPU
     if torch.cuda.is_available():
@@ -293,4 +324,22 @@ if __name__ == "__main__":
     dataset = SupervisedDataset(DATA_PATH, tokenizer)
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
     
-    train(model, dataset, data_collator, tokenizer, lora_params_info)
+    try:
+        train(model, dataset, data_collator, tokenizer, lora_params_info)
+    except RuntimeError as e:
+        if "CUDA out of memory" in str(e):
+            print("OOM occurred. Mark this combination with ×.")
+            model_dir = f"./fine_tuned_model_{int(SET_GRADIENT_ACCUMULATION)}ga_{int(SET_CHECKPOINT)}gc_{int(SET_MIXED_PRECISION)}mp_{int(SET_LORA)}lora"
+            os.makedirs(model_dir, exist_ok=True)
+            with open(os.path.join(model_dir, "OOM_log.txt"), "w") as f:
+                f.write(f"OOM occurred during training.\n")
+                f.write(f"Gradient Accumulation: {SET_GRADIENT_ACCUMULATION}\n")
+                f.write(f"Gradient Checkpointing: {SET_CHECKPOINT}\n")
+                f.write(f"Mixed Precision: {SET_MIXED_PRECISION}\n")
+                f.write(f"LoRA: {SET_LORA}\n")
+                f.write(f"Batch Size: {BATCH_SIZE}\n")
+                f.write(f"Learning Rate: {LEARNING_RATE}\n")
+                f.write(f"Epochs: {EPOCHS}\n")
+                f.write(f"Gradient Accumulation Steps: {ACCUMULATION_STEPS}\n")
+        else:
+            raise

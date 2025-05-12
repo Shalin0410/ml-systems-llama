@@ -12,7 +12,7 @@ from torch import nn
 from llama.generation import Generation
 from torch.utils.checkpoint import checkpoint
 
-SET_GRADIENT_CHECKPOINT = True
+#SET_GRADIENT_CHECKPOINT = False
 
 
 @dataclass
@@ -31,6 +31,7 @@ class ModelArgs: # fixed model configurations for Llama3.2-1B
     max_seq_len: int = 256   # for kv caching pre-allocation
 
     kv_caching: bool = True
+    use_gradient_checkpoint: bool = False
 
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float = 1e-6):
@@ -203,6 +204,7 @@ class Attention(nn.Module):
         self.wo = nn.Linear(args.n_heads * self.head_dim, args.dim, bias=False)
 
         self.kv_caching = args.kv_caching
+        #print(f"model.py kv_caching: {self.kv_caching}")
         if self.kv_caching:
             # Pre-allocate cache tensors for keys and values
             self.cache_k = torch.zeros(
@@ -250,7 +252,8 @@ class Attention(nn.Module):
         xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
 
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
-
+        
+        #print(f"model.py kv_caching: {self.kv_caching}")
         if self.kv_caching:
             self.cache_k = self.cache_k.to(xq)
             self.cache_v = self.cache_v.to(xq)
@@ -443,9 +446,10 @@ class Llama(Generation):
             )
 
             mask = torch.triu(mask, diagonal=1)
-
+        
+        print(f"model.py checkpoint: {self.params.use_gradient_checkpoint}")
         for i, layer in enumerate(self.layers):
-            if SET_GRADIENT_CHECKPOINT and i % 3 != 0:
+            if self.params.use_gradient_checkpoint and i % 3 != 0:
                 h = checkpoint(layer, h, start_pos, freqs_cis, mask)
             else:
                 h = layer(h, start_pos, freqs_cis, mask)

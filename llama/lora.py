@@ -117,7 +117,7 @@ def mark_only_lora_as_trainable(model: nn.Module):
             
             trainable_params += module.lora_A.numel() + module.lora_B.numel()
         
-        total_params += sum(p.numel() for p in module.parameters())
+    total_params += sum(p.numel() for p in model.parameters())
     
     return trainable_params, total_params
 

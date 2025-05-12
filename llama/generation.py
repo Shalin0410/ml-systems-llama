@@ -19,6 +19,7 @@ class Generation(nn.Module):
         input_text_mask = tokens != tokenizer.pad_id
 
         prev_pos = 0
+        print(f"generation.py: kv_caching={kv_caching}")
         for cur_pos in range(min_prompt_len, total_len):
             with torch.no_grad():
                 if kv_caching:
