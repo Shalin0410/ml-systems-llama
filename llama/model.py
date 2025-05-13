@@ -447,7 +447,7 @@ class Llama(Generation):
 
             mask = torch.triu(mask, diagonal=1)
         
-        print(f"model.py checkpoint: {self.params.use_gradient_checkpoint}")
+        #print(f"model.py checkpoint: {self.params.use_gradient_checkpoint}")
         for i, layer in enumerate(self.layers):
             if self.params.use_gradient_checkpoint and i % 3 != 0:
                 h = checkpoint(layer, h, start_pos, freqs_cis, mask)

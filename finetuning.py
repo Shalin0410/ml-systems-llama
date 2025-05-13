@@ -204,8 +204,8 @@ def train(model, dataset, data_collator, tokenizer, lora_params_info):
                     
                     shift_labels = shift_labels.to(shift_logits.device)
                     loss = loss_fct(shift_logits, shift_labels)
-                loss_item = loss.item()
-                loss = loss / ACCUMULATION_STEPS  # Scale the loss for gradient accumulation
+                # Backward pass and optimization
+                loss = loss / ACCUMULATION_STEPS
                 scaler.scale(loss).backward()  # Scale the loss for mixed precision
             else:
                 # Forward pass - using the custom Llama model interface
@@ -225,6 +225,7 @@ def train(model, dataset, data_collator, tokenizer, lora_params_info):
                 loss = loss_fct(shift_logits, shift_labels)
             
                 # Backward pass and optimization
+                loss = loss / ACCUMULATION_STEPS  # Normalize loss for gradient accumulation
                 loss.backward() # Accumulate gradients
             
             # Step and zero gradients every ACCUMULATION_STEPS
@@ -237,7 +238,6 @@ def train(model, dataset, data_collator, tokenizer, lora_params_info):
                     
                 optimizer.zero_grad()
                 
-            
             total_loss += loss.item()
             #progress_bar.set_postfix(loss=total_loss / (step + 1))
             if (step + 1) % 10 == 0:
