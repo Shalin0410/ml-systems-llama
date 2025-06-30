@@ -1,28 +1,86 @@
-# Final Project - EE 508: Hardware Foundations of Machine Learning, Spring 2025
+# Efficient Processing of LLaMA 3.2B
 
-This repository is intended as a minimal example to load Llama 3 models and run inference. It is based on the [official implementation](https://github.com/meta-llama/llama3) from Meta.
-The following modifications have been made:
+This repository provides a clean, minimal implementation to explore efficient inference and fine-tuning techniques on Meta’s [LLaMA 3.2-1B](https://github.com/meta-llama/llama3) model. It is designed for educational and experimentation purposes, particularly aligned with the EE 508 Final Project at USC.
 
-* Remove dependencies on the `fairscale` and `fire` packages.
-* Remove the chat completion feature.
-* Reorganize and simplify the code structure for the generation function. The `Generation` class is now the base class of the Llama model.
-    
+## 🚀 Features
+- Lightweight inference framework using PyTorch.
+- KV cache toggling for performance benchmarking.
+- Custom fine-tuning loop on Alpaca dataset subset.
+- Implements LoRA, mixed precision, gradient checkpointing, and accumulation.
+- No reliance on Hugging Face or other high-level libraries.
 
-## Quick Start
-1. Install required packages:
+## 🧩 Modifications from Meta's Original Release
+- Removed dependencies on `fairscale`, `fire`, and HuggingFace.
+- Removed chat completion logic for simplicity.
+- Refactored architecture: `Generation` is now a base class of the LLaMA model.
+- Added support for benchmarking memory/runtime with/without KV caching.
+- Built-in LoRA implementation using `lora.py`.
 
-```
+## 📦 Quick Start
+
+### 1. Install Required Packages
+```bash
 pip install -r requirements.txt
 ```
 
-2. [Request access](https://www.llama.com/llama-downloads/) to Llama models and download the Llama3.2-1B model weights:
-    * Install the Llama CLI in your preferred environment: `pip install llama-stack`.
-    * Run `llama model list` to show the latest models available.
-    * Run `llama model download --source meta --model-id Llama3.2-1B`.
-    * When the script prompts for your unique custom URL, copy and paste the custom URL. (Clicking on the URL itself does not access the model):
-
-3. Review and run the code `inference.py`:
-
+### 2. Download LLaMA 3.2-1B Weights
+```bash
+pip install llama-stack
+llama model list
+llama model download --source meta --model-id Llama3.2-1B
 ```
+When prompted, paste your custom download URL from Meta.
+
+## 🔍 Inference
+
+### Run baseline inference
+```bash
 python inference.py
 ```
+
+### Disable KV Cache (for benchmarking or training compatibility)
+```bash
+python inference.py --no-kv-cache
+```
+
+### Run benchmarking
+```bash
+python benchmark_inference.py
+```
+
+This will log:
+- Peak GPU memory
+- Runtime latency across varying batch sizes and prompt lengths
+- Comparison: with vs. without KV caching
+
+## 🔧 Fine-Tuning (Instruction Tuning)
+
+### Setup
+Use the Alpaca dataset (200-sample subset). Preprocessing code included in `finetuning.py`.
+
+### Run fine-tuning
+```bash
+python finetuning.py
+```
+
+### Key Techniques Used
+- **LoRA** (Low-Rank Adaptation): Only Q and V projections are updated.
+- **Gradient Accumulation**: Simulates large batch size (set via `accum_steps`).
+- **Mixed Precision Training**: Reduces memory with FP16 via `torch.cuda.amp`.
+- **Gradient Checkpointing**: Applied selectively to save activation memory.
+
+All fine-tuning logic is implemented natively using PyTorch APIs.
+
+## 🧠 Goals
+
+This repo serves as a hands-on platform to understand:
+- Transformer inference internals
+- Efficiency-aware LLM training
+- LLaMA model architecture (from-scratch comprehension)
+
+## 📚 References
+- Meta’s [LLaMA 3 repository](https://github.com/meta-llama/llama3)
+- Stanford Alpaca Dataset: https://github.com/tatsu-lab/stanford_alpaca
+- LoRA: https://arxiv.org/abs/2106.09685
+- PyTorch AMP: https://pytorch.org/docs/stable/notes/amp_examples.html
+- Activation Checkpointing: https://arxiv.org/abs/1710.03740
