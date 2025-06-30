@@ -37,11 +37,7 @@ When prompted, paste your custom download URL from Meta.
 ```bash
 python inference.py
 ```
-
-### Disable KV Cache (for benchmarking or training compatibility)
-```bash
-python inference.py --no-kv-cache
-```
+#### Note: Disable KV Cache (for benchmarking or training compatibility)
 
 ### Run benchmarking
 ```bash
