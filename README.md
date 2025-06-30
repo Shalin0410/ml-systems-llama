@@ -1,6 +1,6 @@
 # Efficient Processing of LLaMA 3.2B
 
-This repository provides a clean, minimal implementation to explore efficient inference and fine-tuning techniques on Meta’s [LLaMA 3.2-1B](https://github.com/meta-llama/llama3) model. It is designed for educational and experimentation purposes, particularly aligned with the EE 508 Final Project at USC.
+This repository provides a clean, minimal implementation to explore efficient inference and fine-tuning techniques on Meta’s [LLaMA 3.2-1B](https://github.com/meta-llama/llama3) model.
 
 ## 🚀 Features
 - Lightweight inference framework using PyTorch.
